@@ -10,7 +10,7 @@
 
 //#define DEBUG
 //
-int check_if_zero(double x1, double x2)
+int check_if_zero_between(double x1, double x2)
 {
     double y1 = cos(exp(x1)) + 0.95;
     double y2 = cos(exp(x2)) + 0.95;
@@ -18,19 +18,19 @@ int check_if_zero(double x1, double x2)
 }
 
 
-int SimpleIntegration(double a, double b)
+int count_zeros(double a, double b)
 {
     double i;
     double sum = 0;
     for (i = a; i < b; i += STEP)
-        sum += check_if_zero(i, i + STEP);
+        sum += check_if_zero_between(i, i + STEP);
     return sum;
 }
 
 int main(int argc, char **argv)
 {
     int myrank, proccount;
-    double a = 1.6, b = 6.05;
+    double a = 1.5, b = 6.05;
 
     double range[2];
     int result = 0, resulttemp;
@@ -138,7 +138,7 @@ int main(int argc, char **argv)
                 MPI_Recv(range, 2, MPI_DOUBLE, 0, DATA, MPI_COMM_WORLD,
                          &status);
                 // compute my part
-                resulttemp = SimpleIntegration(range[0], range[1]);
+                resulttemp = count_zeros(range[0], range[1]);
                 // send the result back
                 MPI_Send(&resulttemp, 1, MPI_INT, 0, RESULT,
                          MPI_COMM_WORLD);
