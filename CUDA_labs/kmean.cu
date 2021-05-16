@@ -93,11 +93,11 @@ void saveClusterCentersAsCsv(double * data, int k, int cols){
 
 
 int main(int argc, char** argv){
-    int k = 3;
-     // weather - cols:8
+    int k = 12;
+     // weather - cols:6
     // iris - cols:2, rows:150, k: 3
     int rows = 1024*1024;
-    int cols = 8;
+    int cols = 6;
     int steps = 50;
 
     size_t data_size = cols * rows * sizeof(double);
@@ -111,7 +111,7 @@ int main(int argc, char** argv){
     int * h_class_count = (int*) malloc(class_count_size);
 
     srand(time(NULL)); 
-    loadData("minute_weather_prepared.csv", 1, cols, rows, h_data);
+    loadData("wind_data_prepared.csv", 1, cols, rows, h_data);
     // initialize clusters centers
     for(int i=0; i < k ; i++){
         int data_index = (rand() % rows) *cols;
