@@ -11,4 +11,4 @@ X = MinMaxScaler().fit_transform(df)
 # id,rowID,hpwren_timestamp,air_pressure,air_temp,avg_wind_direction,avg_wind_speed,max_wind_direction,max_wind_speed,min_wind_direction,min_wind_speed,rain_accumulation,rain_duration,relative_humidity
 
 prepared_df = pd.DataFrame(X, columns = ['avg_wind_direction','avg_wind_speed','max_wind_direction','max_wind_speed','min_wind_direction','min_wind_speed'])
-prepared_df.to_csv("wind_data_prepared.csv")
+prepared_df.to_csv("data2.csv")
