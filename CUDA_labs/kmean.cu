@@ -15,8 +15,8 @@ double calculateDistance(double* data, double* center, int size){
 }
 
 __global__ 
-void kmean(double* data, double* centers, int rows, int cols, int k, int* result, int* class_count){
-    int id = blockIdx.x*blockDim.x+threadIdx.x;
+void kmean(int offset, double* data, double* centers, int rows, int cols, int k, int* result, int* class_count){
+    int id = blockIdx.x*blockDim.x+threadIdx.x +offset;
     if(id >= rows){
         return;
     }
@@ -96,9 +96,11 @@ int main(int argc, char** argv){
     int k = 12;
      // weather - cols:6
     // iris - cols:2, rows:150, k: 3
-    int rows = 1024*1024;
+    int rows = 1586822;
     int cols = 6;
-    int steps = 50;
+    int steps = 30;
+    int offset = 0;
+    char* file_url = "wind_data_prepared.csv";
 
     size_t data_size = cols * rows * sizeof(double);
     size_t centers_size = k * cols * sizeof(double);
@@ -110,8 +112,20 @@ int main(int argc, char** argv){
     int * h_calc_classes = (int*) malloc(calc_classes_size);
     int * h_class_count = (int*) malloc(class_count_size);
 
+   
+    // load arguments
+    if(argc == 5){
+        file_url = argv[1];
+        rows = atoi(argv[2]);
+        cols = atoi(argv[3]);
+        k = atoi(argv[4]);
+    } else {
+        printf("Continue with default parameters \n");
+    }
+        
+
     srand(time(NULL)); 
-    loadData("wind_data_prepared.csv", 1, cols, rows, h_data);
+    loadData(file_url, 1, cols, rows, h_data);
     // initialize clusters centers
     for(int i=0; i < k ; i++){
         int data_index = (rand() % rows) *cols;
@@ -128,6 +142,7 @@ int main(int argc, char** argv){
     cudaError_t error;
     dim3 blocksPerGrid(1024, 1, 1);
 	dim3 threadsPerBlock(1024, 1, 1);
+    int max_rows = blocksPerGrid.x * threadsPerBlock.x;
     cudaMalloc(&d_data, data_size);
     cudaMalloc(&d_centers, centers_size);
     cudaMalloc(&d_calc_classes, calc_classes_size);
@@ -137,22 +152,29 @@ int main(int argc, char** argv){
     for(int step=0;step<steps;step++){
         cudaMemcpy(d_centers, h_centers, centers_size, cudaMemcpyHostToDevice);
         cudaMemset(d_class_count, 0, class_count_size);
-    
-        // call device function
-        kmean<<<blocksPerGrid, threadsPerBlock>>>(d_data, d_centers, rows, cols, k,  d_calc_classes, d_class_count);
 
-        // send results to host 
-        cudaMemcpy(h_calc_classes, d_calc_classes, calc_classes_size, cudaMemcpyDeviceToHost);
-        cudaMemcpy(h_class_count, d_class_count, class_count_size, cudaMemcpyDeviceToHost);
+        for(offset=0;offset<rows;offset+=max_rows){
+            // call device function
+            kmean<<<blocksPerGrid, threadsPerBlock>>>(offset, d_data, d_centers, rows, cols, k,  d_calc_classes, d_class_count);
 
-        // check if error occured
-        error = cudaGetLastError();
-        if(error != cudaSuccess){
-            fprintf(stderr, "Error: %s\n", cudaGetErrorString(error));
-            exit(-1);
+            if(offset+max_rows < rows){
+                calc_classes_size = max_rows * sizeof(int);
+            } else{
+                calc_classes_size = (rows - offset) * sizeof(int);
+            }
+         
+            // send results to host 
+            cudaMemcpy(h_calc_classes + offset , d_calc_classes+offset, calc_classes_size, cudaMemcpyDeviceToHost);
+            cudaMemcpy(h_class_count, d_class_count, class_count_size, cudaMemcpyDeviceToHost);
+            
+            // check if error occured
+            error = cudaGetLastError();
+            if(error != cudaSuccess){
+                fprintf(stderr, "Error: %s\n", cudaGetErrorString(error));
+                exit(-1);
+            }
         }
        
-
         // recalculate clusters (mean value)
         if(step != steps-1){
             // reset cluster centers
