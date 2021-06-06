@@ -140,8 +140,11 @@ int main(int argc, char** argv){
     int * d_calc_classes;
     int * d_class_count;
     cudaError_t error;
-    dim3 blocksPerGrid(1024, 1, 1);
-	dim3 threadsPerBlock(1024, 1, 1);
+    
+
+    dim3 threadsPerBlock(1024, 1, 1);
+    dim3 blocksPerGrid((rows + threadsPerBlock.x - 1) / threadsPerBlock.x, 1, 1);
+	
     int max_rows = blocksPerGrid.x * threadsPerBlock.x;
     cudaMalloc(&d_data, data_size);
     cudaMalloc(&d_centers, centers_size);
@@ -164,9 +167,8 @@ int main(int argc, char** argv){
             }
          
             // send results to host 
-            cudaMemcpy(h_calc_classes + offset , d_calc_classes+offset, calc_classes_size, cudaMemcpyDeviceToHost);
-            cudaMemcpy(h_class_count, d_class_count, class_count_size, cudaMemcpyDeviceToHost);
-            
+            cudaMemcpyAsync(h_calc_classes + offset , d_calc_classes+offset, calc_classes_size, cudaMemcpyDeviceToHost);
+           
             // check if error occured
             error = cudaGetLastError();
             if(error != cudaSuccess){
@@ -174,7 +176,8 @@ int main(int argc, char** argv){
                 exit(-1);
             }
         }
-       
+        cudaDeviceSynchronize();
+        cudaMemcpyAsync(h_class_count, d_class_count, class_count_size, cudaMemcpyDeviceToHost);
         // recalculate clusters (mean value)
         if(step != steps-1){
             // reset cluster centers
@@ -191,6 +194,7 @@ int main(int argc, char** argv){
      
                
             }
+            cudaDeviceSynchronize();
             for(int i=0;i<k;i++){
                 for(int j=0;j<cols;j++){
                     if(h_class_count[i] != 0){
@@ -205,7 +209,12 @@ int main(int argc, char** argv){
     saveClusterCentersAsCsv(h_centers, k, cols);
 
     cudaFree(d_data);
+    cudaFree(d_class_count);
+    cudaFree(d_calc_classes);
+    cudaFree(d_centers);
     free(h_data);
-
+    free(h_class_count);
+    free(h_centers);
+    free(h_calc_classes);
     return 0;
 }
