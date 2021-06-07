@@ -107,23 +107,11 @@ int main(int argc, char** argv){
     size_t calc_classes_size = rows * sizeof(int);
     size_t class_count_size = k * sizeof(int);
 
-    cudaError_t error;
+    double * h_data = (double*) malloc(data_size); // data[row * cols + col]
+    double * h_centers = (double *) malloc(centers_size); // center[k*cols + col]
+    int * h_calc_classes = (int*) malloc(calc_classes_size);
+    int * h_class_count = (int*) malloc(class_count_size);
 
-    double * h_data;
-    double * h_centers;
-    int * h_calc_classes;
-    int * h_class_count;
-   
-    cudaHostAlloc((void**)&h_data,data_size,cudaHostAllocDefault);
-    cudaHostAlloc((void**)&h_centers,centers_size,cudaHostAllocDefault);
-    cudaHostAlloc((void**)&h_calc_classes, calc_classes_size, cudaHostAllocDefault);
-    cudaHostAlloc((void**)&h_class_count, class_count_size, cudaHostAllocDefault);
-
-    error = cudaGetLastError();
-    if(error != cudaSuccess){
-        fprintf(stderr, "Host allocation error: %s\n", cudaGetErrorString(error));
-        exit(-1);
-    }
    
     // load arguments
     if(argc == 5){
@@ -151,37 +139,26 @@ int main(int argc, char** argv){
     double * d_centers;
     int * d_calc_classes;
     int * d_class_count;
-
+    cudaError_t error;
     
 
     dim3 threadsPerBlock(1024, 1, 1);
     dim3 blocksPerGrid((rows + threadsPerBlock.x - 1) / threadsPerBlock.x, 1, 1);
-
+	
     int max_rows = blocksPerGrid.x * threadsPerBlock.x;
-    /*
-    int num_streams = (rows/max_rows) +1 ;
-    cudaStream_t * stream = (cudaStream_t*) malloc(num_streams* sizeof(cudaStream_t));
-    for(int i=0;i<num_streams;i++){
-        
-        cudaStreamCreate(&stream[i]);
-    }
-    //printf("Num streams : %d\n", num_streams);
-    */
-
     cudaMalloc(&d_data, data_size);
     cudaMalloc(&d_centers, centers_size);
     cudaMalloc(&d_calc_classes, calc_classes_size);
     cudaMalloc(&d_class_count, class_count_size);
     cudaMemcpy(d_data, h_data, data_size, cudaMemcpyHostToDevice);
 
-
     for(int step=0;step<steps;step++){
         cudaMemcpy(d_centers, h_centers, centers_size, cudaMemcpyHostToDevice);
         cudaMemset(d_class_count, 0, class_count_size);
 
-        for(offset=0 ;offset<rows;offset+=max_rows){
+        for(offset=0;offset<rows;offset+=max_rows){
             // call device function
-            kmean<<<blocksPerGrid, threadsPerBlock, 0 >>>(offset, d_data, d_centers, rows, cols, k,  d_calc_classes, d_class_count);
+            kmean<<<blocksPerGrid, threadsPerBlock>>>(offset, d_data, d_centers, rows, cols, k,  d_calc_classes, d_class_count);
 
             if(offset+max_rows < rows){
                 calc_classes_size = max_rows * sizeof(int);
@@ -191,7 +168,8 @@ int main(int argc, char** argv){
          
             // send results to host 
             cudaMemcpy(h_calc_classes + offset , d_calc_classes+offset, calc_classes_size, cudaMemcpyDeviceToHost);
-           
+            cudaMemcpy(h_class_count, d_class_count, class_count_size, cudaMemcpyDeviceToHost);
+            
             // check if error occured
             error = cudaGetLastError();
             if(error != cudaSuccess){
@@ -199,7 +177,7 @@ int main(int argc, char** argv){
                 exit(-1);
             }
         }
-        cudaMemcpyAsync(h_class_count, d_class_count, class_count_size, cudaMemcpyDeviceToHost);
+       
         // recalculate clusters (mean value)
         if(step != steps-1){
             // reset cluster centers
@@ -216,7 +194,6 @@ int main(int argc, char** argv){
      
                
             }
-            cudaDeviceSynchronize();
             for(int i=0;i<k;i++){
                 for(int j=0;j<cols;j++){
                     if(h_class_count[i] != 0){
@@ -231,12 +208,7 @@ int main(int argc, char** argv){
     saveClusterCentersAsCsv(h_centers, k, cols);
 
     cudaFree(d_data);
-    cudaFree(d_class_count);
-    cudaFree(d_calc_classes);
-    cudaFree(d_centers);
-    cudaFreeHost(h_data);
-    cudaFreeHost(h_class_count);
-    cudaFreeHost(h_centers);
-    cudaFreeHost(h_calc_classes);
+    free(h_data);
+
     return 0;
 }
