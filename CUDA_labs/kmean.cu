@@ -4,6 +4,30 @@
 #include <math.h>
 #include <cuda_runtime.h>
 
+/*
+#if !defined(__CUDA_ARCH__) || __CUDA_ARCH__ >= 600
+
+#else
+__device__ double atomicAdd(double* address, double val)
+{
+    unsigned long long int* address_as_ull =
+                              (unsigned long long int*)address;
+    unsigned long long int old = *address_as_ull, assumed;
+
+    do {
+        assumed = old;
+        old = atomicCAS(address_as_ull, assumed,
+                        __double_as_longlong(val +
+                               __longlong_as_double(assumed)));
+
+    // Note: uses integer comparison to avoid hang in case of NaN (since NaN != NaN)
+    } while (assumed != old);
+    return __longlong_as_double(old);
+}
+#endif
+*/
+
+
 __device__ 
 double calculateDistance(double* data, double* center, int size){
     // euclidean distance
@@ -14,32 +38,55 @@ double calculateDistance(double* data, double* center, int size){
     return sqrt(distance);
 }
 
+
 __global__ 
 void kmean(int offset, double* data, double* centers, int rows, int cols, int k, int* result, int* class_count){
-    int id = blockIdx.x*blockDim.x+threadIdx.x +offset;
-    if(id >= rows){
-        return;
-    }
-    double distance;
-    double min_distance;
-    int min_distance_cluster;
-    for(int i=0;i<k;i++){
-        if(i == 0 ){
-            min_distance = calculateDistance(&data[id*cols], &centers[i*cols], cols );
-            min_distance_cluster = i;
-        } else {
-            distance = calculateDistance(&data[id*cols], &centers[i*cols], cols );
-            if(distance < min_distance){
+    int id = blockIdx.x*blockDim.x+threadIdx.x + offset;
+    if(id < rows){ 
+        extern __shared__ double s_centers[];
+        if(id < k * cols){
+            s_centers[id] = centers[id];
+        }
+        double distance;
+        double min_distance;
+        int min_distance_cluster;
+        __syncthreads();
+        for(int i=0;i<k;i++){
+            distance = calculateDistance(&data[id*cols], &s_centers[i*cols], cols);
+            if(i == 0 ){
                 min_distance = distance;
                 min_distance_cluster = i;
+            } else {
+                if(distance < min_distance){
+                    min_distance = distance;
+                    min_distance_cluster = i;
+                }
             }
         }
+        //printf("cluster: %d\n", min_distance_cluster);
+        result[id] = min_distance_cluster;
+        atomicAdd(&class_count[min_distance_cluster], 1);
+        
+        /*
+        for(int j=0;j<cols;j++){
+            atomicAdd(&new_centers[min_distance_cluster * cols + j], data[id*cols + j]);
+        }
+        */
     }
-    //printf("cluster: %d\n", min_distance_cluster);
-    result[id] = min_distance_cluster;
-    atomicAdd(&class_count[min_distance_cluster], 1) ;
+}
+
+/*
+__global__
+void divideNewCenters(double* new_centers, int k, int cols, int* class_count){
+    int thread_id = blockIdx.x*blockDim.x+threadIdx.x;
+    if(thread_id >= k*cols){
+        return;
+    }
+    int cluster_id = thread_id/cols;
+    new_centers[thread_id] /= class_count[cluster_id];
 
 }
+*/
 
 
 void loadData(char* file_url, int col_start, int cols, int rows, double* data_ptr){
@@ -102,31 +149,8 @@ int main(int argc, char** argv){
     int offset = 0;
     char* file_url = "wind_data_prepared.csv";
 
-    size_t data_size = cols * rows * sizeof(double);
-    size_t centers_size = k * cols * sizeof(double);
-    size_t calc_classes_size = rows * sizeof(int);
-    size_t class_count_size = k * sizeof(int);
-
-    cudaError_t error;
-
-    double * h_data;
-    double * h_centers;
-    int * h_calc_classes;
-    int * h_class_count;
-   
-    cudaHostAlloc((void**)&h_data,data_size,cudaHostAllocDefault);
-    cudaHostAlloc((void**)&h_centers,centers_size,cudaHostAllocDefault);
-    cudaHostAlloc((void**)&h_calc_classes, calc_classes_size, cudaHostAllocDefault);
-    cudaHostAlloc((void**)&h_class_count, class_count_size, cudaHostAllocDefault);
-
-    error = cudaGetLastError();
-    if(error != cudaSuccess){
-        fprintf(stderr, "Host allocation error: %s\n", cudaGetErrorString(error));
-        exit(-1);
-    }
-   
-    // load arguments
-    if(argc == 5){
+     // load arguments
+     if(argc == 5){
         file_url = argv[1];
         rows = atoi(argv[2]);
         cols = atoi(argv[3]);
@@ -134,6 +158,22 @@ int main(int argc, char** argv){
     } else {
         printf("Continue with default parameters \n");
     }
+
+    size_t data_size = cols * rows * sizeof(double);
+    size_t centers_size = k * cols * sizeof(double);
+    size_t calc_classes_size = rows * sizeof(int);
+    size_t class_count_size = k * sizeof(int);
+
+    double * h_data;
+    //double * h_data = (double*) malloc(data_size); // data[row * cols + col]
+    double * h_centers = (double *) malloc(centers_size); // center[k*cols + col]
+    int * h_calc_classes = (int*) malloc(calc_classes_size);
+    int * h_class_count = (int*) malloc(class_count_size);
+
+    cudaMallocHost((void**)&h_data, data_size);
+
+   
+   
         
 
     srand(time(NULL)); 
@@ -149,74 +189,57 @@ int main(int argc, char** argv){
 
     double * d_data;
     double * d_centers;
+    //double * d_new_centers;
     int * d_calc_classes;
     int * d_class_count;
-
+    cudaError_t error;
     
 
     dim3 threadsPerBlock(1024, 1, 1);
     dim3 blocksPerGrid((rows + threadsPerBlock.x - 1) / threadsPerBlock.x, 1, 1);
-
+	
     int max_rows = blocksPerGrid.x * threadsPerBlock.x;
-    /*
-    int num_streams = (rows/max_rows) +1 ;
-    cudaStream_t * stream = (cudaStream_t*) malloc(num_streams* sizeof(cudaStream_t));
-    for(int i=0;i<num_streams;i++){
-        
-        cudaStreamCreate(&stream[i]);
-    }
-    //printf("Num streams : %d\n", num_streams);
-    */
-
     cudaMalloc(&d_data, data_size);
     cudaMalloc(&d_centers, centers_size);
+    //cudaMalloc(&d_new_centers, centers_size);
     cudaMalloc(&d_calc_classes, calc_classes_size);
     cudaMalloc(&d_class_count, class_count_size);
     cudaMemcpy(d_data, h_data, data_size, cudaMemcpyHostToDevice);
 
-
     for(int step=0;step<steps;step++){
-        cudaMemcpy(d_centers, h_centers, centers_size, cudaMemcpyHostToDevice);
         cudaMemset(d_class_count, 0, class_count_size);
+        cudaMemcpy(d_centers, h_centers, centers_size, cudaMemcpyHostToDevice);
+        //cudaMemset(d_new_centers, 0, centers_size);
 
-        for(offset=0 ;offset<rows;offset+=max_rows){
+        for(offset=0;offset<rows;offset+=max_rows){
             // call device function
-            kmean<<<blocksPerGrid, threadsPerBlock, 0 >>>(offset, d_data, d_centers, rows, cols, k,  d_calc_classes, d_class_count);
+            kmean<<<blocksPerGrid, threadsPerBlock, k*cols*sizeof(double)>>>(offset, d_data, d_centers, rows, cols, k,  d_calc_classes, d_class_count);
 
             if(offset+max_rows < rows){
                 calc_classes_size = max_rows * sizeof(int);
             } else{
                 calc_classes_size = (rows - offset) * sizeof(int);
             }
-         
-            // send results to host 
-            cudaMemcpy(h_calc_classes + offset , d_calc_classes+offset, calc_classes_size, cudaMemcpyDeviceToHost);
-           
-            // check if error occured
-            error = cudaGetLastError();
-            if(error != cudaSuccess){
-                fprintf(stderr, "Error: %s\n", cudaGetErrorString(error));
-                exit(-1);
-            }
         }
-        cudaMemcpyAsync(h_class_count, d_class_count, class_count_size, cudaMemcpyDeviceToHost);
+        cudaMemcpy(h_calc_classes , d_calc_classes, calc_classes_size, cudaMemcpyDeviceToHost);
         // recalculate clusters (mean value)
         if(step != steps-1){
-            // reset cluster centers
+            //cudaDeviceSynchronize();
+            //divideNewCenters<<<1, cols*k>>>(d_new_centers, k, cols, d_class_count);
+            //cudaMemcpy(d_centers, d_new_centers, centers_size, cudaMemcpyDeviceToDevice);
+            //memset(h_centers, 0, centers_size);
             for(int i=0;i<k;i++){
                 for(int j=0;j<cols;j++){
                     h_centers[i*cols+j] = 0;
                 }
             }
+            cudaMemcpy(h_class_count, d_class_count, class_count_size, cudaMemcpyDeviceToHost);
             for(int i=0;i<rows;i++){
                 // sum all values
                 for(int j=0;j<cols;j++){
                     h_centers[h_calc_classes[i] * cols + j] += h_data[i*cols + j];
-                }
-     
-               
+                } 
             }
-            cudaDeviceSynchronize();
             for(int i=0;i<k;i++){
                 for(int j=0;j<cols;j++){
                     if(h_class_count[i] != 0){
@@ -226,17 +249,30 @@ int main(int argc, char** argv){
             }
         }
     }
+        
+    // send results to host
+    //cudaMemcpy(h_centers, d_new_centers, centers_size, cudaMemcpyDeviceToHost); 
+    
+                
+    // check if error occured
+    error = cudaGetLastError();
+    if(error != cudaSuccess){
+        fprintf(stderr, "Error: %s\n", cudaGetErrorString(error));
+        exit(-1);
+    }
 
     saveResultAsCsv(h_calc_classes, rows);
     saveClusterCentersAsCsv(h_centers, k, cols);
 
     cudaFree(d_data);
+    cudaFree(d_data);
     cudaFree(d_class_count);
     cudaFree(d_calc_classes);
     cudaFree(d_centers);
+    //free(h_data);
     cudaFreeHost(h_data);
-    cudaFreeHost(h_class_count);
-    cudaFreeHost(h_centers);
-    cudaFreeHost(h_calc_classes);
+    free(h_calc_classes);
+    free(h_centers);
+    free(h_class_count);
     return 0;
 }

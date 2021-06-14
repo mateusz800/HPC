@@ -102,6 +102,16 @@ int main(int argc, char** argv){
     int offset = 0;
     char* file_url = "wind_data_prepared.csv";
 
+       // load arguments
+       if(argc == 5){
+        file_url = argv[1];
+        rows = atoi(argv[2]);
+        cols = atoi(argv[3]);
+        k = atoi(argv[4]);
+    } else {
+        printf("Continue with default parameters \n");
+    }
+
     size_t data_size = cols * rows * sizeof(double);
     size_t centers_size = k * cols * sizeof(double);
     size_t calc_classes_size = rows * sizeof(int);
@@ -113,15 +123,7 @@ int main(int argc, char** argv){
     int * h_class_count = (int*) malloc(class_count_size);
 
    
-    // load arguments
-    if(argc == 5){
-        file_url = argv[1];
-        rows = atoi(argv[2]);
-        cols = atoi(argv[3]);
-        k = atoi(argv[4]);
-    } else {
-        printf("Continue with default parameters \n");
-    }
+ 
         
 
     srand(time(NULL)); 
@@ -208,7 +210,14 @@ int main(int argc, char** argv){
     saveClusterCentersAsCsv(h_centers, k, cols);
 
     cudaFree(d_data);
+    cudaFree(d_data);
+    cudaFree(d_class_count);
+    cudaFree(d_calc_classes);
+    cudaFree(d_centers);
     free(h_data);
+    free(h_calc_classes);
+    free(h_centers);
+    free(h_class_count);
 
     return 0;
 }
